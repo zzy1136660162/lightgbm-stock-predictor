@@ -1,0 +1,27 @@
+# 配置文件
+data:
+  start_date: '20200101'  # 数据开始日期
+  end_date: '20241231'    # 数据结束日期
+  target_stock: 'sh'      # 目标股票代码 ('sh' 为上证指数)
+  predict_days: 20        # 预测天数 (约1个月)
+  feature_windows: [5, 10, 20, 30, 60]  # 特征计算窗口
+
+model:
+  objective: 'regression'
+  metric: 'rmse'
+  boosting_type: 'gbdt'
+  num_leaves: 31
+  learning_rate: 0.05
+  feature_fraction: 0.9
+  bagging_fraction: 0.8
+  bagging_freq: 5
+  verbose: 0
+  seed: 42
+
+backtest:
+  initial_cash: 100000    # 初始资金
+  transaction_fee: 0.001  # 交易费率
+  slippage: 0.001         # 滑点
+
+visualization:
+  figure_size: [12, 8]
