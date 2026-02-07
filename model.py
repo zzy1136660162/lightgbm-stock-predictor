@@ -6,6 +6,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from config import MODEL_CONFIG, DATA_CONFIG
 import warnings
+import os
+import pickle
+import time
 warnings.filterwarnings('ignore')
 
 class StockPredictor:
@@ -103,20 +106,119 @@ class StockPredictor:
     def get_feature_importance(self) -> pd.DataFrame:
         """
         获取特征重要性
-        
+
         Returns:
             pd.DataFrame: 特征重要性排序
         """
         if self.model is None:
             raise ValueError("模型尚未训练")
-        
+
         importance = self.model.feature_importance(importance_type='gain')
         feature_importance = pd.DataFrame({
             'feature': self.feature_names,
             'importance': importance
         }).sort_values('importance', ascending=False)
-        
+
         return feature_importance
+
+    def save_model(self, filepath: str = "model/lgb_model.pkl") -> str:
+        """
+        保存模型到文件
+
+        Parameters:
+            filepath: 模型保存路径
+
+        Returns:
+            str: 保存的文件路径
+        """
+        if self.model is None:
+            raise ValueError("模型尚未训练，无法保存")
+
+        # 创建目录（如果不存在）
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+        # 保存模型
+        with open(filepath, 'wb') as f:
+            pickle.dump({
+                'model': self.model,
+                'feature_names': self.feature_names,
+                'model_params': self.model_params
+            }, f)
+
+        # 获取文件大小
+        file_size = os.path.getsize(filepath)
+        file_size_str = self._format_file_size(file_size)
+
+        print(f"[OK] 模型已保存到: {filepath}")
+        print(f"[PACK] 模型文件大小: {file_size_str}")
+
+        return filepath
+
+    def load_model(self, filepath: str = "model/lgb_model.pkl") -> None:
+        """
+        从文件加载模型
+
+        Parameters:
+            filepath: 模型文件路径
+        """
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"模型文件不存在: {filepath}")
+
+        # 加载模型
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+
+        self.model = data['model']
+        self.feature_names = data.get('feature_names', [])
+        self.model_params = data.get('model_params', {})
+
+        # 获取文件大小
+        file_size = os.path.getsize(filepath)
+        file_size_str = self._format_file_size(file_size)
+
+        print(f"[OK] 模型已从 {filepath} 加载")
+        print(f"[PACK] 模型文件大小: {file_size_str}")
+        print(f"[STATS] 特征数量: {len(self.feature_names)}")
+
+    def get_model_size(self, filepath: str = "model/lgb_model.pkl") -> dict:
+        """
+        获取模型文件大小信息
+
+        Parameters:
+            filepath: 模型文件路径
+
+        Returns:
+            dict: 文件大小信息
+        """
+        if os.path.exists(filepath):
+            file_size = os.path.getsize(filepath)
+            return {
+                'path': filepath,
+                'bytes': file_size,
+                'formatted': self._format_file_size(file_size)
+            }
+        else:
+            return {
+                'path': filepath,
+                'bytes': 0,
+                'formatted': '文件不存在'
+            }
+
+    def _format_file_size(self, size_bytes: int) -> str:
+        """
+        格式化文件大小
+
+        Parameters:
+            size_bytes: 字节大小
+
+        Returns:
+            str: 格式化后的大小字符串
+        """
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.2f} TB"
 
 def walk_forward_training(df: pd.DataFrame, train_period: int = 1000, test_period: int = 200) -> list:
     """
@@ -153,6 +255,11 @@ def walk_forward_training(df: pd.DataFrame, train_period: int = 1000, test_perio
         
         # 训练模型
         predictor.train(X_train, y_train)
+
+        # 保存模型（每个周期保存一个版本）
+        timestamp = int(time.time())
+        model_path = f"model/wf_model_period_{start_idx}_{timestamp}.pkl"
+        predictor.save_model(model_path)
         
         # 预测
         y_pred = predictor.predict(X_test)

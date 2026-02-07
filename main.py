@@ -134,6 +134,15 @@ def run_pipeline(stock_code=None, use_walk_forward=True, save_output=True):
             print("\n8. 保存结果...")
             save_results(results)
             print("结果已保存到 output 目录")
+
+        # 9. 保存模型
+        print("\n9. 保存模型...")
+        model_path = predictor.save_model("model/lgb_model.pkl")
+        results['model_path'] = model_path
+
+        # 显示模型文件信息
+        model_info = predictor.get_model_size("model/lgb_model.pkl")
+        print(f"[PACK] 模型文件大小: {model_info['formatted']}")
         
         end_time = datetime.now()
         elapsed_time = end_time - start_time
@@ -168,7 +177,7 @@ def main():
     )
     
     if results:
-        print("\n✅ 项目成功完成!")
+        print("\n[OK] 项目成功完成!")
         return 0
     else:
         print("\n❌ 项目执行失败!")
