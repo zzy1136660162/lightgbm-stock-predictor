@@ -1,187 +1,127 @@
-import pandas as pd
-import numpy as np
-import warnings
-import os
+# -*- coding: utf-8 -*-
+"""
+单股票测试脚本
+
+使用:
+    python main.py --stock 600808
+    python main.py --stock 600519 --show-chart
+"""
+
 import argparse
-from datetime import datetime
-warnings.filterwarnings('ignore')
+import os
+import sys
+import pandas as pd
 
-# 导入项目模块
-from config import DATA_CONFIG, MODEL_CONFIG, BACKTEST_CONFIG
-from data_loader import load_stock_data
-from feature_engineering import feature_engineering_pipeline
-from model import StockPredictor, walk_forward_training
-from signal_generator import generate_trading_strategy
-from backtester import Backtester, evaluate_strategy
-from visualization import create_performance_report
+# 添加项目根目录
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, PROJECT_DIR)
 
-def save_results(results, output_dir="output"):
-    """保存结果到文件"""
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    # 保存策略数据
-    if 'strategy_data' in results:
-        results['strategy_data'].to_csv(f"{output_dir}/strategy_data.csv", index=False)
-    
-    # 保存预测结果
-    if 'predictions' in results:
-        pred_df = pd.DataFrame({'predictions': results['predictions']})
-        pred_df.to_csv(f"{output_dir}/predictions.csv", index=False)
-    
-    # 保存回测结果
-    if 'backtest_results' in results and results['backtest_results']:
-        bt_results = results['backtest_results']
-        if 'portfolio_history' in bt_results:
-            bt_results['portfolio_history'].to_csv(f"{output_dir}/portfolio_history.csv")
-        if 'trade_log' in bt_results:
-            pd.DataFrame(bt_results['trade_log']).to_csv(f"{output_dir}/trade_log.csv", index=False)
+from config.settings import DEFAULT_STOCKS
+from src.data_manager import DataManager
+from src.feature import FeatureEngineer
+from src.model import StockModel
+from src.backtest import Backtester
 
-def run_pipeline(stock_code=None, use_walk_forward=True, save_output=True):
-    """运行完整的预测流水线"""
-    print("=== LightGBM 股票1个月预测基线模型 ===")
-    start_time = datetime.now()
-    print(f"开始时间: {start_time}")
-    
-    results = {}
-    
-    try:
-        # 1. 数据加载
-        print("\n1. 加载股票数据...")
-        data = load_stock_data(stock_code)
-        print(f"数据加载完成，共{len(data)}条记录")
-        print(f"数据时间范围: {data['date'].min()} 到 {data['date'].max()}")
-        results['raw_data'] = data
-        
-        # 2. 特征工程
-        print("\n2. 执行特征工程...")
-        processed_data = feature_engineering_pipeline(data)
-        print(f"特征工程完成，共{len(processed_data)}条记录，{len(processed_data.columns)}个特征")
-        results['processed_data'] = processed_data
-        
-        # 3. 模型训练
-        print("\n3. 模型训练...")
-        if use_walk_forward:
-            print("使用Walk-forward训练方法...")
-            wf_results = walk_forward_training(processed_data, train_period=1000, test_period=200)
-            print(f"训练完成，共{len(wf_results)}个训练周期")
-            
-            # 保存walk-forward结果摘要
-            wf_summary = []
-            for i, result in enumerate(wf_results):
-                wf_summary.append({
-                    'period': i+1,
-                    'train_start': result['train_period'][0],
-                    'train_end': result['train_period'][1],
-                    'test_start': result['test_period'][0],
-                    'test_end': result['test_period'][1],
-                    'rmse': result['rmse'],
-                    'mae': result['mae']
-                })
-            
-            wf_summary_df = pd.DataFrame(wf_summary)
-            results['wf_summary'] = wf_summary_df
-            
-            # 使用最后一个模型的结果
-            last_result = wf_results[-1]
-            predictions = last_result['predictions']
-            predictor = last_result['predictor']
-        else:
-            print("使用标准训练方法...")
-            predictor = StockPredictor(MODEL_CONFIG)
-            X, y = predictor.prepare_data(processed_data)
-            predictor.train(X, y)
-            predictions = predictor.predict(X)
-            
-            # 保存特征重要性
-            importance = predictor.get_feature_importance()
-            results['feature_importance'] = importance
-        
-        results['predictor'] = predictor
-        results['predictions'] = predictions
-        print(f"预测完成，共生成{len(predictions)}个预测结果")
-        
-        # 4. 信号生成
-        print("\n4. 生成交易策略...")
-        strategy_data = generate_trading_strategy(processed_data, predictions)
-        results['strategy_data'] = strategy_data
-        print("策略生成完成")
-        
-        # 5. 回测
-        print("\n5. 运行回测...")
-        backtester = Backtester(
-            initial_cash=BACKTEST_CONFIG['initial_cash'],
-            transaction_fee=BACKTEST_CONFIG['transaction_fee'],
-            slippage=BACKTEST_CONFIG['slippage']
-        )
-        backtest_results = backtester.run_backtest(strategy_data)
-        results['backtest_results'] = backtest_results
-        print("回测完成")
-        
-        # 6. 评估策略
-        print("\n6. 评估策略表现...")
-        evaluate_strategy(backtest_results)
-        
-        # 7. 生成可视化报告
-        print("\n7. 生成可视化报告...")
-        fig = create_performance_report(results, backtest_results)
-        if fig:
-            fig.savefig("output/performance_report.png", dpi=300, bbox_inches='tight')
-            print("可视化报告已保存到 output/performance_report.png")
-        
-        # 8. 保存结果
-        if save_output:
-            print("\n8. 保存结果...")
-            save_results(results)
-            print("结果已保存到 output 目录")
 
-        # 9. 保存模型
-        print("\n9. 保存模型...")
-        model_path = predictor.save_model("model/lgb_model.pkl")
-        results['model_path'] = model_path
+def find_stock_name(code: str) -> str:
+    """查找股票名称"""
+    for c, name in DEFAULT_STOCKS:
+        if c == code:
+            return name
+    return '未知'
 
-        # 显示模型文件信息
-        model_info = predictor.get_model_size("model/lgb_model.pkl")
-        print(f"[PACK] 模型文件大小: {model_info['formatted']}")
-        
-        end_time = datetime.now()
-        elapsed_time = end_time - start_time
-        print(f"\n=== 项目运行完成 ===")
-        print(f"结束时间: {end_time}")
-        print(f"运行时长: {elapsed_time}")
-        
-        return results
-        
-    except Exception as e:
-        print(f"\n❌ 运行过程中发生错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
+
+def run_single_stock(code: str, show_chart: bool = False) -> dict:
+    """
+    运行单只股票测试
+    
+    Args:
+        code: 股票代码
+        show_chart: 是否显示图表
+    
+    Returns:
+        回测结果
+    """
+    name = find_stock_name(code)
+    
+    print("=" * 60)
+    print(f"股票回测: {code} {name}")
+    print("=" * 60)
+    
+    # 1. 获取数据
+    dm = DataManager()
+    df = dm.get_stock_data(code)
+    
+    if df is None:
+        print(f"❌ 无法获取 {code} 的数据")
         return None
+    
+    print(f"✅ 数据加载: {len(df)} 条")
+    print(f"   时间范围: {df['日期'].min()} ~ {df['日期'].max()}")
+    
+    # 2. 特征工程
+    fe = FeatureEngineer()
+    df = fe.calculate_features(df)
+    df = fe.add_target(df)
+    df_clean = fe.clean_data(df)
+    
+    if df_clean is None:
+        print("❌ 特征计算失败")
+        return None
+    
+    print(f"✅ 特征计算: {len(df_clean)} 条有效数据")
+    print(f"   特征数: {len(fe.feature_cols)}")
+    
+    # 3. 分割数据
+    X_train, X_test, y_train, y_test = fe.split_data(df_clean)
+    print(f"✅ 数据分割: 训练集 {len(X_train)} / 测试集 {len(X_test)}")
+    
+    # 4. 训练模型
+    model = StockModel()
+    model.train(X_train, y_train)
+    print("✅ 模型训练完成")
+    
+    # 5. 预测
+    preds = model.predict(X_test)
+    print(f"✅ 预测完成: {len(preds)} 个")
+    
+    # 6. 回测
+    test_start = len(df_clean) - 100
+    df_test = df_clean.iloc[test_start:].copy()
+    df_test['pred'] = preds
+    
+    bt = Backtester()
+    result = bt.run_backtest(df_test)
+    
+    # 7. 输出结果
+    print("\n" + "=" * 60)
+    print("回测结果")
+    print("=" * 60)
+    print(f"买入持有收益: {result['buyhold_return']:+.2f}%")
+    print(f"策略收益:      {result['strategy_return']:+.2f}%")
+    print(f"策略收益(净):  {result['strategy_return_net']:+.2f}%")
+    print(f"准确率:        {result['accuracy']:.1%}")
+    print(f"交易次数:      {result['trades']}")
+    
+    # 特征重要性
+    print("\n【特征重要性 Top 5】")
+    importance = model.get_feature_importance()
+    print(importance.head(5).to_string(index=False))
+    
+    return result
+
 
 def main():
-    parser = argparse.ArgumentParser(description='LightGBM 股票1个月预测基线模型')
-    parser.add_argument('--stock', type=str, default=None, 
-                       help='股票代码 (默认: 上证指数)')
-    parser.add_argument('--no-walk-forward', action='store_true',
-                       help='不使用walk-forward训练')
-    parser.add_argument('--no-save', action='store_true',
-                       help='不保存结果到文件')
+    parser = argparse.ArgumentParser(description='股票预测回测')
+    parser.add_argument('--stock', type=str, default='600808',
+                       help='股票代码 (默认: 600808)')
+    parser.add_argument('--chart', action='store_true',
+                       help='显示图表')
     
     args = parser.parse_args()
     
-    # 运行流水线
-    results = run_pipeline(
-        stock_code=args.stock,
-        use_walk_forward=not args.no_walk_forward,
-        save_output=not args.no_save
-    )
-    
-    if results:
-        print("\n[OK] 项目成功完成!")
-        return 0
-    else:
-        print("\n❌ 项目执行失败!")
-        return 1
+    run_single_stock(args.stock, args.chart)
+
 
 if __name__ == "__main__":
-    exit(main())
+    main()
